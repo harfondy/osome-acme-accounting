@@ -1,4 +1,4 @@
-import { Body, ConflictException, Controller, Get, Post } from '@nestjs/common';
+import { Body, ConflictException, Controller, Get, HttpException, Post } from '@nestjs/common';
 import { Company } from '../../db/models/Company';
 import {
   Ticket,
@@ -22,6 +22,18 @@ interface TicketDto {
   category: TicketCategory;
 }
 
+const MapTicketTypeToCategory: Record<TicketType, TicketCategory> = {
+  [TicketType.managementReport]: TicketCategory.accounting,
+  [TicketType.registrationAddressChange]: TicketCategory.corporate,
+  [TicketType.strikeOff]: TicketCategory.management,
+}
+
+const MapTicketTypeToUserRole: Record<TicketType, UserRole> = {
+  [TicketType.managementReport]: UserRole.accountant,
+  [TicketType.registrationAddressChange]: UserRole.corporateSecretary,
+  [TicketType.strikeOff]: UserRole.director,
+}
+
 @Controller('api/v1/tickets')
 export class TicketsController {
   @Get()
@@ -33,15 +45,26 @@ export class TicketsController {
   async create(@Body() newTicketDto: newTicketDto) {
     const { type, companyId } = newTicketDto;
 
-    const category =
-      type === TicketType.managementReport
-        ? TicketCategory.accounting
-        : TicketCategory.corporate;
+    const companies = await Company.findAll({
+      where: {
+        id: companyId
+      }
+    })
 
-    const userRole =
-      type === TicketType.managementReport
-        ? UserRole.accountant
-        : UserRole.corporateSecretary;
+    if (companies.length <= 0) {
+      throw new ConflictException(
+        `There is no company with this company id ${companyId}`
+      )
+    }
+
+    const category = MapTicketTypeToCategory[type]
+    const userRole = MapTicketTypeToUserRole[type]
+
+    if (!category || !userRole) {
+      throw new ConflictException(
+        `There is no category and user role with this ticket type ${type}`
+      )
+    }
 
     const assignees = await User.findAll({
       where: { companyId, role: userRole },
@@ -58,7 +81,40 @@ export class TicketsController {
         `Multiple users with role ${userRole}. Cannot create a ticket`,
       );
 
-    const assignee = assignees[0];
+    let assignee = assignees[0];
+
+    if (type === TicketType.registrationAddressChange) {
+      const existTicket = await Ticket.findAll({
+        where: {
+          companyId: companyId,
+          type: type
+        }
+      })
+      if (existTicket.length === 1) {
+
+        // assigned to director
+        const assigneesDirector = await User.findAll({
+          where: { companyId, role: UserRole.director },
+          order: [['createdAt', 'DESC']],
+        });
+
+        if (!assignees.length)
+          throw new ConflictException(
+            `Cannot find user with role ${UserRole.director} to create a ticket, ${userRole} is already handling a ticket`,
+          );
+
+        if (assignees.length > 1)
+          throw new ConflictException(
+            `Multiple users with role ${UserRole.director}. Cannot create a ticket, ${userRole} is already handling a ticket`,
+          );
+
+        assignee = assigneesDirector[0]
+      }
+
+      if (existTicket.length >= 2) {
+        throw new ConflictException("Company cannot take registrationAddressChange ticket anymore")
+      }
+    }
 
     const ticket = await Ticket.create({
       companyId,
