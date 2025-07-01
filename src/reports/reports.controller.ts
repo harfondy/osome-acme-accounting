@@ -17,9 +17,17 @@ export class ReportsController {
   @Post()
   @HttpCode(201)
   generate() {
-    this.reportsService.accounts();
-    this.reportsService.yearly();
-    this.reportsService.fs();
+    setTimeout(() => this.backgroundProcess(), 0)
     return { message: 'finished' };
+  }
+
+  private async backgroundProcess() {
+    try {
+      await this.reportsService.accounts();
+      await this.reportsService.yearly();
+      await this.reportsService.fs();
+    } catch (error) {
+      console.log(error)
+    }
   }
 }
